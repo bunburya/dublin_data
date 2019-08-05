@@ -1,65 +1,41 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
 # TODO:  Why even have nginx serve the main page?  Just have static html file?
 
-from time import localtime, strftime
 from urllib.request import urlopen
-from os.path import join, expanduser
 from json import loads, dumps
-from configparser import ConfigParser
+
+from helpers import get_config, timestamp
 
 class RTPIError(Exception): pass
 
-class RTPIData:
+class RTPI:
 
-    MODES = {'BUS', 'LUAS', 'BIKE'}
+    SERVICES = {'BUS', 'LUAS'}
 
-    RTPI_URL =  ('https://data.smartdublin.ie/cgi-bin/rtpi/'
-                'realtimebusinformation?stopid={}')
-    
-    DB_URL =    ('https://api.jcdecaux.com/vls/v1/stations/{}'
-                '?contract=Dublin&apiKey={}')
+    URL =  ('https://data.smartdublin.ie/cgi-bin/rtpi/'
+                'realtimebusinformation?stopid={stop_id}')
 
     RTPI_WANTED_DATA = {'duetime', 'destination', 'route', 'additionalinformation',
             'direction'}
 
-    def __init__(self, config=None, conf_file=None):
+    def __init__(self, config):
         
-        self.config = config or self.load_config()
-        self.conf_file = conf_file or expanduser('~/.config/dublin_data.ini')
-
-    def load_config(self, conf_file=None):
-
-        self.config = ConfigParser()
-        self.config.optionxform = lambda option: option
-        self.config.read(self.conf_file)
-
+        self.config = config
         self.RESULT_COUNT = self.config.getint('CONFIG_VALUES', 'RESULT_COUNT')
-        self.DB_API_KEY = self.config['CONFIG_VALUES']['DB_API_KEY']
-
         self.LUAS_STOPS = self.config['LUAS_STOPS']
         self.BUS_STOPS = self.config['BUS_STOPS']
-        self.BIKE_STOPS = self.config['BIKE_STOPS']
 
     def get_all_data(self):
-
-        return self.get_data(*self.MODES)
-
-    def get_data(self, *modes):
-
-        results = {}
-        if 'LUAS' in modes:
-            results['LUAS'] = self.get_rtpi_data('LUAS')
-        if 'BUS' in modes:
-            results['BUS'] = self.get_rtpi_data('BUS')
-        if 'BIKE' in modes:
-            results['BIKE'] = self.get_bike_data()
-        results['timestamp'] = localtime()
-        results['timestamp_str'] = strftime('%H:%M:%S on %A %d %B %Y')
-        return results
+        
+        data = {}
+        for s in self.SERVICES:
+            data[s] = self.get_rtpi_data(s)
+        return data
 
     def get_rtpi_data(self, bus_or_luas, de_dup=True):
-
+        """Fetch API data according to config and return in an easily usable format."""
         if bus_or_luas == 'BUS':
             stops = self.BUS_STOPS
         elif bus_or_luas == 'LUAS':
@@ -99,19 +75,9 @@ class RTPIData:
         
         return data
 
-    def get_bike_data(self):
-
-        data = {}
-        for stop in self.BIKE_STOPS:
-            stop_id = self.BIKE_STOPS[stop]
-            data[stop] = self.fetch_bike_data(stop_id)
-        return data
-
-    # Functions to fetch data from APIs
-
     def fetch_rtpi_data(self, stop_id):
-
-        url = self.RTPI_URL.format(stop_id)
+        """Fetch relevant data from API and return it."""
+        url = self.URL.format(stop_id=stop_id)
         json_data = urlopen(url).read().decode()
         data = loads(json_data)
         if data['errorcode'] == '0':
@@ -123,24 +89,44 @@ class RTPIData:
         else:
             raise RTPIError(data['errorcode'], data['errormessage'])
 
-    def fetch_bike_data(self, stop_id):
 
-        url = self.DB_URL.format(stop_id, self.DB_API_KEY)
+class DublinBikes:
+    
+    URL =    ('https://api.jcdecaux.com/vls/v1/stations/{stop_id}'
+                '?contract=Dublin&apiKey={api_key}')
+    
+    def __init__(self, config):
+        
+        self.config = config
+        self.API_KEY = self.config['API_KEYS']['DUBLINBIKES']
+        self.BIKE_STOPS = self.config['BIKE_STOPS']
+    
+    def get_bike_data(self, with_label=True):
+        """Fetch API data according to config and return in an easily usable format."""
+        data = {}
+        for stop in self.BIKE_STOPS:
+            stop_id = self.BIKE_STOPS[stop]
+            data[stop] = self.fetch_bike_data(stop_id)
+        if with_label:
+            return {'BIKE': data}
+        else:
+            return data
+
+    def fetch_bike_data(self, stop_id):
+        """Fetch relevant data from API and return it.""" 
+        url = self.URL.format(stop_id=stop_id, api_key=self.API_KEY)
         json_data = urlopen(url).read().decode()
         data = loads(json_data)
         return data['status'], data['available_bikes'], data['bike_stands']
 
-class BikeData:
-
-# Callable for WSGI so that script can run as webserver
-
-def application(environ, start_response):
-    dtd = DublinTransportData()
-    data = dtd.get_all_data()
-    start_response('200 OK', [('Content-Type','application/json'),
-        ('Access-Control-Allow-Origin', '*')])
-    return [bytes(dumps(data), 'utf-8')]
+def get_all_data():
+    conf = get_config()
+    rtpi = RTPI(conf)
+    db = DublinBikes(conf)
+    data = rtpi.get_all_data()
+    data.update(db.get_bike_data())
+    timestamp(data)
+    return data
 
 if __name__ == '__main__':
-    dtd = DublinTransportData()
-    print(dtd.get_all_data())
+    print(get_all_data())
