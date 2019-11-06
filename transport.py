@@ -6,7 +6,7 @@
 from urllib.request import urlopen
 from json import loads, dumps
 
-from helpers import get_config, timestamp
+from .helpers import get_config, timestamp
 
 class RTPIError(Exception): pass
 
@@ -98,7 +98,7 @@ class DublinBikes:
     def __init__(self, config):
         
         self.config = config
-        self.API_KEY = self.config['API_KEYS']['DUBLINBIKES']
+        self.API_KEY = self.config['CONFIG_VALUES']['DB_API_KEY']
         self.BIKE_STOPS = self.config['BIKE_STOPS']
     
     def get_bike_data(self, with_label=True):
